@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>San Marcos, TX Storm Reports</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        body, html {
+          padding: 0;
+          margin: 0;
+          background-color: #333; /* Dark gray background color */
+        }
+        #map {
+            height: 800px;
+            width: 69%;
+            float: left;
+            border: 1px solid #ccc; /* Light gray border */
+            border-radius: 10px; /* Rounded corners */
+            overflow: hidden; /* Ensures map stays within rounded borders */
+        }
+        #dashboard {
+            height: 800px;
+            width: 30%;
+            float: left;
+            padding: 10px;
+            text-align: center; /* Center align the title */
+            box-sizing: border-box;
+            background: #f4f4f4;
+            border: 1px solid #ccc; /* Light gray border */
+            border-radius: 10px; /* Rounded corners */
+            margin-left: 10px; /* Adds space between map and dashboard */
+        }
+        #filter {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        canvas {
+            width: 100%;
+            height: 250px; /* Reduced height for a smaller chart */
+        }
+        .legend {
+            line-height: 18px;
+            color: #555;
+            padding: 6px;
+            background: white;
+            border: 1px solid #ddd;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            font-size: 14px;
+            /* Apply text shadow for the white halo effect */
+            text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+        }
+        .legend i {
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+
+        h1 {
+            text-align: center; /* Center align the title */
+            color: #fff
+        }
+    </style>
+</head>
+<body>
+    <h1>Texas 72 Hour NWS Local Storm Reports</h1>
+    <div id="filter">
+        <label for="wfoSelect">Filter by WFO:</label>
+        <select id="wfoSelect">
+            <option value="all">All</option>
+        </select>
+    </div>
+    <div id="map"></div>
+    <div id="dashboard">
+        <h2>Storm Reports by Category</h2>
+        <canvas id="pieChart"></canvas>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
+    <script>
+        // Initialize the map
+        var map = L.map('map').setView([29.8833, -97.9414], 10);
+
+        // Add a tile layer
+        // L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        //     maxZoom: 19,
+        //     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        // }).addTo(map);
+
+        // Define base layers
+        var streetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        var satelliteMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        });
+
+        // Layer control
+        var baseMaps = {
+            "Street Map": streetMap,
+            "Satellite": satelliteMap
+        };
+        L.control.layers(baseMaps).setPosition('topright').addTo(map);
+
+
+        // Define the NOAA service URL
+        var noaaServiceUrl = 'https://mapservices.weather.noaa.gov/vector/rest/services/obs/nws_local_storm_reports/MapServer/2/query?where=1%3D1&outFields=*&f=geojson';
+
+        var stormLayer;
+        var texasWFOs = [];
+        var eventColors = {
+            "Tornado": "#FF5733",
+            "Thunderstorm Wind": "#C70039",
+            "Hail": "#900C3F",
+            "Flood": "#FFC300",
+            "Heavy Rain": "#DAF7A6",
+            "Snow": "#581845",
+            "Non-Tstm Wnd Gst": "#4CBB17",
+            "Dust Storm": "#0E6EB8",
+            "Tstm Wnd Gst": "#420420",
+            "Flash Flood": "#7EF9FF",
+            "Tstm Wnd Dmg": "#FFD700",
+            "Debris Flow": "#B0BF1A",
+            "Rain": "#3B444B",
+            "Lightning": "#8F9779",
+            "Costal Flood": "#E97451",
+            "Rip Currents": "#AB274F",
+            "Storm Surge": "#D3212D",
+            "Landspout": "#3D0C02",
+            "Funnel Cloud": "#007FFF",
+            "Extreme Heat": "#00FFFF",
+            "Non-Tstm Wnd Dmg": "#89CFF0",
+            "Wildfire": "#F5F5DC",
+            "Fog": "#3D2B1F",
+            "High Sust Winds": "#FFE4C4",
+            "Other": "#9F8170" // Default for any unlisted categories
+        };
+
+        // Function to convert Unix milliseconds to a readable date format
+        function formatUnixTime(unixTime) {
+            var date = new Date(unixTime);
+            return date.toLocaleString();
+        }
+
+        // Function to update the storm reports layer based on the selected WFO
+        function updateStormReports(wfo) {
+            if (stormLayer) {
+                map.removeLayer(stormLayer);
+            }
+
+            fetch(noaaServiceUrl)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok ' + response.statusText);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Filter features based on selected WFO
+                    var filteredData = {
+                        type: "FeatureCollection",
+                        features: data.features.filter(feature => {
+                            return wfo === 'all' || feature.properties.wfo_id === wfo;
+                        })
+                    };
+
+                    // Update pie chart with filtered data
+                    updatePieChart(filteredData);
+
+                    // Parse and add the storm reports to the map
+                    stormLayer = L.geoJSON(filteredData, {
+                        onEachFeature: function (feature, layer) {
+                            if (feature.properties) {
+                                var validTime = formatUnixTime(feature.properties.lsr_validtime);
+                                var popupContent = "<p><strong>Date and Time:</strong> " + validTime + "</p>" +
+                                                   "<p><strong>Event:</strong> " + feature.properties.descript + "</p>" +
+                                                   "<p><strong>Description:</strong> " + feature.properties.remarks + "</p>";
+                                layer.bindPopup(popupContent);
+                            }
+                        },
+                        pointToLayer: function (feature, latlng) {
+                            var color = eventColors[feature.properties.descript] || eventColors["Other"];
+                            return L.circleMarker(latlng, {
+                                radius: 8,
+                                fillColor: color,
+                                color: "#000",
+                                weight: 1,
+                                opacity: 1,
+                                fillOpacity: 0.8
+                            });
+                        }
+                    }).addTo(map);
+                    map.fitBounds(stormLayer.getBounds(), {padding: [50, 50]});
+                })
+                .catch(err => {
+                    console.error('Error fetching data from NOAA service:', err);
+                });
+        }
+
+        // Update pie chart to reflect the current data
+        var pieChart;
+        function updatePieChart(data) {
+            var categories = {};
+            data.features.forEach(feature => {
+                var category = feature.properties.descript;
+                if (categories[category]) {
+                    categories[category]++;
+                } else {
+                    categories[category] = 1;
+                }
+            });
+
+            if (pieChart) {
+                pieChart.destroy();
+            }
+
+            var pieChartCanvas = document.getElementById('pieChart');
+            pieChart = new Chart(pieChartCanvas, {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(categories),
+                    datasets: [{
+                        data: Object.values(categories),
+                        backgroundColor: Object.keys(categories).map(cat => eventColors[cat] || eventColors["Other"])
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    legend: {
+                        position: 'right'
+                    },
+                    plugins: {
+                        datalabels: {
+                            color: '#ffffff',
+                            formatter: (value, ctx) => {
+                                return ctx.chart.data.labels[ctx.dataIndex] + ': ' + value;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Add a legend to the map
+        var legend = L.control({position: 'bottomleft'});
+        legend.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'legend');
+            var labels = [];
+            var categories = Object.keys(eventColors);
+            categories.forEach(function (category) {
+                labels.push('<i style="background:' + eventColors[category] + '"></i> ' + category);
+            });
+            div.innerHTML = labels.join('<br>');
+            return div;
+        };
+        legend.addTo(map);
+
+        // Fetch the storm reports and populate the WFO dropdown
+        fetch(noaaServiceUrl)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok ' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(data => {
+                data.features.forEach(feature => {
+                    if (feature.properties.state === 'TX' && !texasWFOs.some(wfo => wfo.id === feature.properties.wfo_id)) {
+                        texasWFOs.push({
+                            id: feature.properties.wfo_id,
+                            name: feature.properties.wfo
+                        });
+                    }
+                });
+
+                var wfoSelect = document.getElementById('wfoSelect');
+                texasWFOs.sort((a, b) => a.id.localeCompare(b.id)).forEach(wfo => {
+                    var option = document.createElement('option');
+                    option.value = wfo.id;
+                    option.text = `${wfo.id} - ${wfo.name}`;
+                    wfoSelect.appendChild(option);
+                });
+
+                wfoSelect.addEventListener('change', function() {
+                    updateStormReports(this.value);
+                });
+
+                updateStormReports('all'); // Initial load with all WFOs
+            })
+            .catch(err => {
+                console.error('Error fetching data from NOAA service:', err);
+            });
+    </script>
+</body>
+</html>
